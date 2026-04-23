@@ -54,7 +54,7 @@ class DQN:
 		if np.random.random() < self.epsilon:
 			action = np.random.randint(self.action_dim) # 随机选择动作
 		else:
-			state = torch.tensor([state], dtype=torch.float).to(self.device)
+			state = torch.tensor(np.array([state]), dtype=torch.float).to(self.device)
 			action = self.q_net(state).argmax().item() # 选择Q值最大的动作
 		return action
 	
@@ -87,7 +87,7 @@ target_update = 10
 buffer_size = 10000
 minimal_size = 500
 batch_size = 64
-device = torch.device("cpu")
+device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 env_name = 'CartPole-v1'
 env = gym.make(env_name)
