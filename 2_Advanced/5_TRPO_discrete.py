@@ -41,7 +41,6 @@ class ValueNet(torch.nn.Module):
 
 
 class TRPO:
-    """TRPO算法"""
     def __init__(self, hidden_dim, state_space, action_space, lmbda,
                  kl_constraint, alpha, critic_lr, gamma, device):
         state_dim = state_space.shape[0]
@@ -70,17 +69,10 @@ class TRPO:
         kl = torch.mean(
             torch.distributions.kl.kl_divergence(old_action_dists, new_action_dists)
         )
-
-        kl_grad = torch.autograd.grad(
-            kl, self.actor.parameters(), create_graph=True
-        )
+        kl_grad = torch.autograd.grad(kl, self.actor.parameters(), create_graph=True)
         kl_grad_vector = torch.cat([grad.view(-1) for grad in kl_grad])
-
         kl_grad_vector_product = torch.dot(kl_grad_vector, vector)
-
-        grad2 = torch.autograd.grad(
-            kl_grad_vector_product, self.actor.parameters()
-        )
+        grad2 = torch.autograd.grad(kl_grad_vector_product, self.actor.parameters())
         grad2_vector = torch.cat([grad.view(-1) for grad in grad2])
         return grad2_vector
 
@@ -159,12 +151,8 @@ class TRPO:
         )
 
         new_para = self.line_search(
-            states,
-            actions,
-            advantage,
-            old_log_probs,
-            old_action_dists,
-            descent_direction * max_coef
+            states, actions, advantage, old_log_probs,
+            old_action_dists, descent_direction * max_coef
         )
 
         torch.nn.utils.convert_parameters.vector_to_parameters(
@@ -172,36 +160,19 @@ class TRPO:
         )
 
     def update(self, transition_dict):
-        states = torch.tensor(
-            transition_dict['states'], dtype=torch.float
-        ).to(self.device)
-        actions = torch.tensor(
-            transition_dict['actions']
-        ).view(-1, 1).to(self.device)
-        rewards = torch.tensor(
-            transition_dict['rewards'], dtype=torch.float
-        ).view(-1, 1).to(self.device)
-        next_states = torch.tensor(
-            transition_dict['next_states'], dtype=torch.float
-        ).to(self.device)
-        dones = torch.tensor(
-            transition_dict['dones'], dtype=torch.float
-        ).view(-1, 1).to(self.device)
+        states = torch.tensor(transition_dict['states'], dtype=torch.float).to(self.device)
+        actions = torch.tensor(transition_dict['actions']).view(-1, 1).to(self.device)
+        rewards = torch.tensor(transition_dict['rewards'], dtype=torch.float).view(-1, 1).to(self.device)
+        next_states = torch.tensor(transition_dict['next_states'], dtype=torch.float).to(self.device)
+        dones = torch.tensor(transition_dict['dones'], dtype=torch.float).view(-1, 1).to(self.device)
 
         td_target = rewards + self.gamma * self.critic(next_states) * (1 - dones)
         td_delta = td_target - self.critic(states)
 
-        advantage = compute_advantage(
-            self.gamma, self.lmbda, td_delta
-        ).to(self.device)
+        advantage = compute_advantage(self.gamma, self.lmbda, td_delta).to(self.device)
 
-        old_log_probs = torch.log(
-            self.actor(states).gather(1, actions) + 1e-8
-        ).detach()
-
-        old_action_dists = torch.distributions.Categorical(
-            self.actor(states).detach()
-        )
+        old_log_probs = torch.log(self.actor(states).gather(1, actions) + 1e-8).detach()
+        old_action_dists = torch.distributions.Categorical(self.actor(states).detach())
 
         critic_loss = F.mse_loss(self.critic(states), td_target.detach())
 
@@ -209,9 +180,7 @@ class TRPO:
         critic_loss.backward()
         self.critic_optimizer.step()
 
-        self.policy_learn(
-            states, actions, old_action_dists, old_log_probs, advantage
-        )
+        self.policy_learn(states, actions, old_action_dists, old_log_probs, advantage)
 
 
 num_episodes = 500
