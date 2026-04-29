@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 from collections import namedtuple
 import itertools
 from itertools import count
@@ -382,7 +382,7 @@ class MBPO:
         env_batch_size = int(policy_train_batch_size * self.real_ratio)
         model_batch_size = policy_train_batch_size - env_batch_size
         for epoch in range(10):
-            env_obs, env_action, env_reward, env_next_obs, env_done = self.env__pool.sample(env_batch_size)
+            env_obs, env_action, env_reward, env_next_obs, env_done = self.env_pool.sample(env_batch_size)
             if self.model_pool.size() > 0:
                 model_obs, model_action, model_reward, model_next_obs, model_done = self.model_pool.sample(model_batch_size)
                 obs = np.concatenate((env_obs, model_obs), axis=0)
@@ -400,3 +400,111 @@ class MBPO:
                 'dones': done
             }
             self.agent.update(transition_dict)
+    def train_model(self):
+        obs, action, reward, next_obs, done = self.env_pool.return_all_samples()
+        inputs = np.concatenate((obs, action), axis=-1)
+        reward = np.array(reward)
+        labels = np.concatenate(
+            [np.reshape(reward, (reward.shape[0], -1)), next_obs - obs], axis=-1
+        )
+        self.fake_env.model.train(inputs, labels)
+    
+    def explore(self):
+        obs, _ = self.env.reset()
+        done, episode_return = False, 0
+        while not done:
+            action = self.agent.take_action(obs)
+            next_obs, reward, terminated, truncated, _ = self.env.step(action)
+            done = terminated or truncated
+            self.env_pool.add(obs, action, reward, next_obs, done)
+            obs = next_obs
+            episode_return += reward
+        return episode_return
+
+    def train(self):
+        return_list = []
+        explore_return = self.explore() # 随机探索采取数据
+        print('episode: 1, return: %d' % explore_return)
+        return_list.append(explore_return)
+
+        for i_episode in range(self.num_episode - 1):
+            obs, _ = self.env.reset()
+            done, episode_return = False, 0
+            step = 0
+            while not done:
+                if step % 50 == 0:
+                    self.train_model()
+                    self.rollout_model()
+                action = self.agent.take_action(obs)
+                next_obs, reward, terminated, truncated, _ = self.env.step(action)
+                done = terminated or truncated
+                self.env_pool.add(obs, action, reward, next_obs, done)
+                obs = next_obs
+                episode_return += reward
+
+                self.update_agent()
+                step += 1
+            return_list.append(episode_return)
+            print('episode: %d, return: %d' % (i_episode + 2, episode_return))
+        return return_list
+class ReplayBuffer:
+    def __init__(self, capacity):
+        self.buffer = collections.deque(maxlen=capacity)
+
+    def add(self, state, action, reward, next_state, done):
+        self.buffer.append((state, action, reward, next_state, done))
+
+    def size(self):
+        return len(self.buffer)
+
+    def sample(self, batch_size):
+        if batch_size > len(self.buffer):
+            return self.return_all_samples()
+        else:
+            transitions = random.sample(self.buffer, batch_size)
+            state, action, reward, next_state, done = zip(*transitions)
+            return np.array(state), action, reward, np.array(next_state), done
+
+    def return_all_samples(self):
+        all_transitions = list(self.buffer)
+        state, action, reward, next_state, done = zip(*all_transitions)
+        return np.array(state), action, reward, np.array(next_state), done
+
+real_ratio = 0.5
+env_name = 'Pendulum-v1'
+env = gym.make(env_name)
+num_episodes = 20
+actor_lr = 5e-4
+critic_lr = 5e-3
+alpha_lr = 1e-3
+hidden_dim = 128
+gamma = 0.98
+tau = 0.005  # 软更新参数
+buffer_size = 10000
+target_entropy = -1
+model_alpha = 0.01  # 模型损失函数中的加权权重
+state_dim = env.observation_space.shape[0]
+action_dim = env.action_space.shape[0]
+action_bound = env.action_space.high[0]  # 动作最大值
+
+rollout_batch_size = 1000
+rollout_length = 1  # 推演长度k,推荐更多尝试
+model_pool_size = rollout_batch_size * rollout_length
+
+agent = SAC(state_dim, hidden_dim, action_dim, action_bound, actor_lr,
+            critic_lr, alpha_lr, target_entropy, tau, gamma)
+model = EnsembleDynamicsModel(state_dim, action_dim, model_alpha)
+fake_env = FakeEnv(model)
+env_pool = ReplayBuffer(buffer_size)
+model_pool = ReplayBuffer(model_pool_size)
+mbpo = MBPO(env, agent, fake_env, env_pool, model_pool, rollout_length,
+            rollout_batch_size, real_ratio, num_episodes)
+
+return_list = mbpo.train()
+
+episodes_list = list(range(len(return_list)))
+plt.plot(episodes_list, return_list)
+plt.xlabel('Episodes')
+plt.ylabel('Returns')
+plt.title('MBPO on {}'.format(env_name))
+plt.show()
